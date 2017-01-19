@@ -1,0 +1,223 @@
+\documentclass[12pt]{article}
+\usepackage[paperheight=11in,paperwidth=8.5in,top=1in, bottom=1in, left=1in, right=1in]{geometry}
+\usepackage{standalone}
+\usepackage{ifthen}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usepackage{bigstrut}
+
+\begin{document}
+\begin{center}
+  \LARGE{\textbf{Lecture 1 Notes: What is Bayes?}}
+  
+  \Large{\today{}}
+\end{center}
+\section{Conceptual overview and differences between frequentist and Bayesian statistics}
+
+\subsection*{Frequentist statistics:}
+Frequentists interpret probability as a relative frequency of an event rather than a description of knowledge. In other words, frequentists approach data analysis by asking: how would the parameters change if the experiment were repeated many times (``hence frequentist")?
+
+\begin{itemize}  
+  \item Parameters are point estimates. Uncertainty in these estimates are in light of unobserved future data, e.g., if we were to repeat the experiment many times, how often would we expect the true parameter to fall within a certain interval around our sample estimate (usually 95\%)? 
+  
+  \item In frequentist statistics, the model is considered fixed or ``true" while the data are random. Analyses essentially assess the probability of the data given the ``true" model. 
+\end{itemize}
+
+\subsection*{Bayesian statistics:}
+In contrast, Bayesian inference is the re-allocation of credibility (probability) from prior knowledge to posterior knowledge in light of data. The probabilistic question is flipped relative to frequentist statistics: what is the probability of the model (what we actually want) given the (usually) known and observed data. 
+\begin{itemize}  
+  \item Parameters are not point estimates but are instead themselves random variables drawn from some distribution.
+  
+  \item Emphasis is explicitly on parameter estimation (whether for inference or prediction) rather than null hypothesis testing.
+  
+  \item Steps of analysis: 
+  \begin{enumerate}
+    \item What is the question and what are the data? Identify the relevant response and explanatory variables given the scientific question of interest.
+    
+    \item Create a descriptive mathamatical model for the question and data at hand. The parameterization should result in biologically meaningful estimates and theoretically sound.
+    
+    \item Specify prior distributions for the parameters.
+  
+    \item Use Bayes to reallocate credibility across parameters to get posterior parameter estimates.
+    
+    \item Assess model validity using QC diagnostics and posterior predictive simulation. If model is a poor fit, go back to steps 1 \& 2.
+    
+     \item Assuming that the model is reasonable and does a good job (step 4), interpret the posterior with respect to the greater biological and theoretical questions of interest.
+  \end{enumerate}
+\end{itemize}
+
+
+\section{Probability recap:}
+
+As a recap, probabilities are a way to assign numbers to possibilities. 
+\begin{itemize}
+  \item Three properties:
+  \begin{enumerate}
+    \item probabilities are nonnegative (p $\ge$ 0)
+    \item Sum of probs across all events in sample space must = 1
+    \item For any two mutually exclusive events, the probability that one or the other happens is the sum of their probabilities.
+  \end{enumerate}
+\end{itemize}
+
+\subsection*{Joint and conditional probabilities:}
+
+For the sake of expedience, I am going to use the example table from 4.1 in the puppy book (Kruschke, 2015). Sorry I couldn't come up with a better example. It's lame. 
+<<Make_table_4.1, echo=FALSE>>=
+library(knitr)
+library(xtable)
+options(xtable.floating=FALSE)
+options(xtable.timestamp="") 
+Brown <- c(0.11, 0.20, 0.04, 0.01)
+Blue  <- c( 0.03, 0.14, 0.03, 0.16)
+Hazel <- c(0.03, 0.09, 0.02, 0.02)
+Green <- c(0.01, 0.05, 0.02, 0.03) 
+
+colMat <- rbind(Brown, Blue, Hazel, Green)
+colnames(colMat) <- c("Black", "Brunette", "Red", "Blond")
+# MarginalH <- colSums(colMat)
+# MarginalE <- c(rowSums(colMat),1)
+# colDat <- rbind(colMat, MarginalH)
+# colDat <- cbind
+# colnames(colDat) <- c("Black", "Brunette", "Red", "Blond", "Marginal (eye color)")
+# rownames(colDat) <- c("Brown", "Blue", "Hazel", "Green", "Marginal (hair color)")
+#print(xtable(as.data.frame(colDat)))
+@
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{l|cccc|l}
+  \hline
+  & \multicolumn{4}{c}{Hair Color} & \\
+  \hline
+ Eye Color & Black & Brunette & Red & Blond & Marginal (eye color) \\ 
+  \hline
+Brown & 0.11 & 0.20 & 0.04 & 0.01 & 0.37 \\ 
+  Blue & 0.03 & 0.14 & 0.03 & 0.16 & 0.36 \\ 
+  Hazel & 0.03 & 0.09 & 0.02 & 0.02 & 0.16 \\ 
+  Green & 0.01 & 0.05 & 0.02 & 0.03 & 0.11 \\ 
+  \hline
+  Marginal (hair color) & 0.18 & 0.48 & 0.12 & 0.21 & 1.00 \\ 
+   \hline
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item Each main cell contains the \emph{joint probability} of combinations of eye and hair color and is denoted $p(e,h)$. Joint probabilities are symmetric: $p(e,h)$ = $p(h,e)$.
+  
+  \item \emph{Marginal probabilities} are the probabilities of hair or eye color overall, regardless of the other variable. They are computed by summing the probabilities of each row/column ($p(e) = \sum_{h}p(e,h)$ \& $p(h) = \sum_{e}p(e,h)$).
+  
+  \begin{itemize}
+    \item When variables are continuous, $p(e,h)$ is a probability density and the marginal probability requires integration rather than summation.  Therefore, for an eye color row, the marginal probability would be $p(e) = \int p(e,h) dh$. This is called \emph{marginalizing over} $h$ or \emph{integrating out} $h$. Likewise, $p(h) = \int p(e,h) de$.
+  \end{itemize}
+  
+  \item In both frequentist and Bayesian statistics we are ultimately after the probability of some event $x$ \emph{given} we know another outcome $y$ happened or is true or $p(x|y)$. We call these \emph{conditional probabilities}. $p(x|y)$ can be interpeted as among all joint outcomes with value $y$, what proportion share value $x$.
+  \begin{itemize}
+    \item For example, using the example table above, given someone from this population is a brunette, what is the probability they have green eyes? It's easy to see that this is just the joint probability of brunette and green eyes divided by the the marginal probability of being a brunette: $0.05/0.48=0.104$.
+  \end{itemize}
+ \item Formally, we can define conditional probabilities as:
+    \begin{equation}
+      p(x|y) = \frac{p(x,y)}{p(y)} = \frac{p(x,y)}{\sum_xp(x,y)}
+    \end{equation}
+    and when $x$ is continuous, 
+    \begin{equation}
+      p(x|y) = \frac{p(x,y)}{p(y)} = \frac{p(x,y)}{\int p(x,y) dx}.
+    \end{equation}
+  \item It's important to note that generally $p(x|y) \neq p(y|x)$.  
+\end{itemize}  
+
+\section{Bayes theorem}
+
+\subsection*{Derivation from conditional probabilities}
+
+From the definition of conditional probabilities:
+\begin{equation}
+  p(x|y) = \frac{p(x,y)}{p(y)}
+\end{equation}
+which is the probability that $x$ and $y$ happen together relative to the probability that $y$ occurs at all. Some algebraic wankery: 
+\begin{equation}
+  p(x|y)p(y) = p(x,y). 
+\end{equation}
+The same goes for $p(y|x)$:
+\begin{equation}
+  p(y|x) = \frac{p(y,x)}{p(x)} \Rightarrow p(y|x)p(x) = p(y,x).
+\end{equation}
+
+\noindent Because joint probabilities are communicative, $p(x,y)=p(y,x)$ and therefore
+\begin{equation}
+  p(x|y)p(y) = p(y|x)p(x). 
+\end{equation}
+
+\noindent More algebra and we get Bayes theorem:
+\begin{align}
+  p(x|y) &= \frac{p(y|x)p(x)}{p(y)}. 
+\end{align}
+
+ More formally, we can express Bayes' theorem as 
+\begin{align}
+  p(\theta|D) &= \frac{p(D|\theta)p(\theta)}{p(D)}. 
+\end{align}
+
+\noindent In words, we would say the \emph{posterior} probability of the model (or model parameters $\theta$) given the data $D$ equals the probability of the data given the model (\emph{likelihood}) times the \emph{prior} probability of the model divided by the probability of the data. 
+ 
+ The probability of the data $p(D)$ is the \emph{marginal likelihood} or evidence for the model. It is the overall probability of the data averaged across all possible parameter values $\theta$ weighted by the prior probability of $\theta$. When the model parameters are discrete (rare for this class), 
+ \begin{align}
+   p(D) &= \sum_\theta p(D|\theta)p(\theta);
+ \end{align}
+when $\theta$ is continuous (most of the time),
+\begin{align}
+   p(D) &= \int p(D|\theta)p(\theta) d(\theta).
+ \end{align}
+
+\subsection*{Simple example:}
+<<ex1, echo=FALSE>>=
+library(xtable)
+lik <- 0.8
+prior <- 0.04
+falsePos <- 0.17
+
+dat<-matrix(c(lik, 1-lik, falsePos, 1-falsePos),nrow=2)
+colnames(dat)<-c("Rickettsia","No Rickettsia")
+rownames(dat)<-c("T = +","T = -")
+#datTab <- xtable(dat, label="datTab")
+@
+In urban areas of Monte Negro Municipality, Western Amazon, Brazil, \Sexpr{prior*100}\% of dogs are infected with \emph{Rickettsia}. \Sexpr{lik*100}\% of serological tests detect \emph{Rickettsia} when present. The test's false positive rate is \Sexpr{falsePos*100}\% (i.e., \emph{Rickettsia} is detected but not present). A randomly sampled dog has tested positive for \emph{Rickettsia}. What is the probability that the dog is indeed infected?
+
+It makes it easy if we create a contingency table based off of what we know:
+
+<<echo=FALSE, results='asis'>>=
+addtorow <- list()
+addtorow$pos <- list(0,0)
+addtorow$command <- c("& \\multicolumn{2}{c}{Disease}\\\\\n",
+                      "Test result & Rickettsia & No Rickettsia\\\\\n")
+print(xtable(dat, align="l|cc",), add.to.row=addtorow, include.colnames=FALSE, latex.environments="center", floating=TRUE)
+@
+
+Adding the prior in, we can get the joint and marginal probabilities:
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{l|ll|l}
+  \hline
+  & \multicolumn{2}{c}{Disease} & \\
+ Test result & Rickettsia & No Rickettsia & Marginal\\
+ \hline
+Test+ & \Sexpr{lik*prior} & \Sexpr{falsePos * (1-prior)} & 0.1952\\ 
+  Test- & \Sexpr{(1 - lik)*prior} & \Sexpr{(1 - falsePos)*(1-prior)} & 0.848\\ 
+   \hline
+   Marginal & 0.04 & 0.96 & 1.0
+\end{tabular}
+\end{table}
+
+The posterior probability of a dog being infected with \emph{Rickettsia} is the likelihood of a positive test result when the disease is present (\Sexpr{lik}) * the prior probability of the disease prevelance, \Sexpr{prior} (this is cell 1,1 of our matrix). We then divide that by the marginal probability of a positive test result (row 1).
+
+<<>>=
+lik <- 0.8
+prior <- 0.04
+falsePos <- 0.17
+
+probData  <- lik*prior + falsePos*(1 - prior)
+Posterior <- (lik * prior)/probData
+return(Posterior)
+
+@
+\end{document}
