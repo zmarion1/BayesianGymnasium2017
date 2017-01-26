@@ -1,0 +1,235 @@
+---
+title: "Lecture 3: Simple Bernoulli models (cont.)"
+author: "Zachary Marion"
+date: "1/24/2017"
+output:
+  pdf_document
+---
+```{r setup, include=FALSE}
+library(knitr)
+library(extrafont)
+loadfonts()
+setwd("~/Dropbox/BayesClass/2017 Class/Lecture 3")
+knitr::opts_chunk$set(
+  echo = TRUE,
+  comment = NA,
+  fig.align = "center",
+  fig.height = 5,
+  fig.width = 7
+  )
+```
+
+\section{Introduction to the Stan programming language}
+So far we have had a conceptual introduction to Bayes, discussed the Bernoulli likelihood function, and talked about how to mathematically specify a beta prior based on real-world information. Now it is time to learn how to build a Bayesian model in the Stan programming language. 
+
+
+To begin, we need to load some packages and set some options:
+
+```{r stanPackages, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+library(shinystan)
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+
+The `options(mc.cores = parallel::detectCores())` line detects the number of cores you have on your computer so we can incorporate parallel processing of multiple MCMC chains at the same time. (NOTE: I know this works for Macs. I have absolutely no idea if this is the same thing you need to do for PCs or linux-based OS's. Sorry!)
+
+
+Also, we need to specify the working directory we will be operating out of:
+
+```{r, eval=FALSE}
+setwd("YOUR DIRECTORY")
+```
+
+
+RStan allows a Stan program to be coded as a text file (usually with suffix `.stan`) or in a R character vector. I recommend using a separate `.stan` file for the model rather than combining both character vector and execution script together.
+
+
+A Stan model is composed of up to six "blocks": `data`, `transformed data`, `parameters`, `transformed parameters`, `model`, and `generated quantities`. For now we will concentrate on the `data`, `parameters`, and `model` block. 
+
+The Stan language is slightly in flux (will probably change a bit with Stan 3.0), but the language combines aspects of both C++ and R. A few important quirks:
+
+  * A completed line must end in a semicolon.
+  * All data and parameters used in the model must be declared and assigned a type (e.g., real or vector).
+  * Comments can be set aside with either // or #.
+
+
+The first section of Stan code is the `data` block. Data are declared as `integer` or `real` and can be `vectors` (column order), `row_vectors` (row order), `matrices`, or (more generally) `arrays`. There are also a host of more specific versions of vectors, matrices, or arrays (e.g., `simplex`, `correlation matrix`). 
+
+
+Below is the `data` block for our simple Bernoulli model:
+
+```{r, eval=FALSE}
+data {
+  int<lower=0> nObs;                // Total number of observations
+  int<lower=0, upper=1> obs[nObs];  // 1D array of observations
+}  
+```
+
+Here, we have defined `nObs` as a scalar `integer` with a lower bound at 0. We have declared `obs` to be an `integer` as well, bounded between 0--1 (the two possible values). `obs` is a 1-D `array` of length `nObs`. `Arrays` are always row-order. It cannot be a `vector` because `vectors` are `real` numbers only.
+
+
+Defining the lower and upper bounds of data in the `data` block serves as a QC check. If anything is amiss (say you have a lower bound of zero but negative data) the model will stop and throw an error. This prevents weird and incorrect posteriors.
+
+Next is the `parameters` block:
+```{r, eval=FALSE}
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+```
+
+We only have one parameter, `theta`, a scalar real number. Because `theta` is the probability of water, it is bounded between 0--1. Bounds in the `parameters` block serve a different function. Stan works on a log-probability gradient and will convert constrained parameters to unconstrained parameters when it works with the log probabilities. It will then back-convert the log-posterior. 
+  
+  * This means that it is very easy to specify folded distributions (e.g., setting `lower=0` for a standard deviation and then assigning a normal or cauchy prior will automatically fold the distribution so the parameter is always positive.)
+  
+Last we have the `model` block:  
+```{r, eval=FALSE}
+model {
+  theta ~ beta(1,1);                // uniform prior on theta
+  for(n in 1:nObs) {        
+    obs[n] ~ bernoulli(theta);      // bernoulli likelihood function    
+	}
+}
+```
+Here, we set a flat (uniform) beta prior on `theta`. 
+
+* By default, if a prior is not specified for a parameter, Stan assigns a uniform prior over the bounds given (if any). This is because a uniform prior essentially does nothing and so drops out mathematically.
+
+
+Finally, we loop over our data for the Bernoulli likelihood function.
+  * This is actually slower and unnecessary. Stan allows for vectorization, which means we  could just have easily ditched the loops and specified `obs ~ bernoulli(theta)`. 
+
+
+The last step is to save our full model as a `.stan` object as  `ex1Bernoulli.stan`.
+
+```{r engine = 'cat', engine.opts = list(file = "ex1Bernoulli.stan", lang = "stan")}
+data {
+  int<lower=0> nObs;                // Total number of observations
+  int<lower=0, upper=1> obs[nObs];  // 1D array of observations
+}  
+
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+
+model {
+  theta ~ beta(1,1);                // uniform prior on theta
+  for(n in 1:nObs) {        
+    obs[n] ~ bernoulli(theta);      // bernoulli likelihood function    
+  }
+}
+```
+
+
+\section{Running the Stan code:}
+First we need to set up the data as a list:
+```{r, tidy=TRUE}
+obs <- rep(c(1,0), times=c(4,1))
+nObs = length(obs)
+dat <- list(obs = obs, nObs=nObs)
+```
+
+Then, to run the code, we use the `stan()` function:
+```{r mod1, message=TRUE, warning=TRUE, cache=TRUE}
+mod1 <- stan(file="ex1Bernoulli.stan", #path to .stan file
+             data=dat,
+             iter=2000, # number of MCMC iterations
+             chains=4,  # number of independent MCMC chains
+             seed=3)    # set the seed so run is repeatable
+```
+
+By default, Stan uses the first half of the iterations for each chain as warmup and therefore are discarded. During this time, the HMC sampler is tuned. You can specify the number of warmup iterations with the `warmup` argument. 
+
+Before we pay much attention to the results, we need to check some diagnostics to ensure we have reached a stable posterior distribution. We can do this either using the `shinystan` package interface (`launch_shinystan()') or via command line. 
+
+\subsection*{traceplots}
+First, we can inspect chain mixing visually for both `theta` and the log-posterior using the `traceplot` function: 
+```
+traceplot(mod1, par="theta")
+```
+
+```{r thetatrace, echo=FALSE, fig.height=2.5}
+ thetaTrace <- traceplot(mod1, par="theta")
+thetaTrace + theme(text=element_text(family="ArialMT")) 
+```
+
+The traceplot should look like a hairy caterpillar with no discernable  differences among chains. More important is the `traceplot` for the log-posterior, accessed using the `par="lp__"` argument:
+```
+traceplot(mod1, par="lp__")
+```
+```{r lptrace, echo=FALSE,fig.height=2.5}
+ lpTrace <- traceplot(mod1, par="lp__")
+lpTrace + theme(text=element_text(family="ArialMT"))
+```
+
+In general, if the diagnostics for the log-posterior are acceptable, the diagnostics for individual parameters will be as well. 
+
+\subsection*{Effective sample size and $\hat{R}$}
+Two other diagnostics to consider are the effective sample size (ESS) and the Gelman and Rubin statistic.
+
+
+Ideally, we would like each iteration in the Markov chain to be independent of the previous sample. Unfortunately, MCMC samples are often autocorrelated with each other. The effective sample size (ESS) quantifies the amount of independent information in autocorrelated chains, specifically the amount of information equivalent to chains with no autocorrelation. It is calculated by dividing the total sample size $N$ by the amount of autocorrelation:
+
+\begin{equation}
+  ESS = \frac{N}{1 + 2\sum_{k=1}^\infty ACF(k)}.
+\end{equation}
+
+The Gelman and Rubin potential scale reduction statistic ($\hat{R}$) measures the ratio of the average variance of samples within each chain to the variance of the pooled samples across chains. If the chains are at equilibrium, the variances will be the same and $\hat{R}=1$. 
+
+* Any value greater than one is suspect, and values above 1.1 indicate poor mixing. 
+
+
+We can access these statistics by using the `print` function:
+
+```{r}
+print(mod1)
+```
+
+As with the `traceplot` output, a good overall diagnostic of model adequacy is to look at the log-posterior (`lp__`) results. For both the `lp__` and `theta`, the ESS and $\hat{R}$ look good. 
+
+
+Another diagnostic is the Monte Carlo uncertainty (`se_mean`). The standard error of the mean of the posterior draws is the uncertainty associated with the Monte Carlo approximation. It approaches zero as the effective sample size goes to infinity. 
+
+* This should be low. 
+
+\subsection*{Accessing results}
+
+As with the diagnostics, we can get a numerical summary by using the `print` command. We will use the `par` argument to filter the results to return just the `theta` parameter (useful when you have estimated hundreds or thousands of parameters).
+
+```{r, eval=FALSE}
+print(mod1, par="theta")
+```
+
+We can also plot the posterior as a density:
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+stan_dens(mod1, par="theta")
+```
+
+```{r, echo=FALSE, fig.height=2, fig.width=3, message=FALSE, warning=FALSE}
+par(mfrow=c(1,2))
+dens <- stan_dens(mod1, par="theta")
+dens + theme(text=element_text(family="ArialMT"))
+```
+
+or a histogram:
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+stan_dens(mod1, par="theta")
+```
+
+```{r, echo=FALSE, fig.height=2, fig.width=3, message=FALSE, warning=FALSE}
+hist <- stan_hist(mod1, par="theta")
+hist + theme(text=element_text(family="ArialMT"))
+```
+
+From the plots we can see that the posterior is skewed. Thus one should be careful about using the mean as a point estimate. The median is probably more appropriate. 
+
+
+When reporting uncertainty intervals, most people use the 95\% Highest Density Interval. However, Gelman recommends using the 50\% interval for the following reasons:
+ 
+  1. Computational stability (it takes a lot fewer iterations to get good coverage around the 50% interval)
+  
+  2. More intuitive evaluation (half the 50% intervals should contain the "true" value)
+ 
+  3. In applications, it is best to get a sense of where the parameter and predicted values will be, not to attempt unrealistic near-certainty.
