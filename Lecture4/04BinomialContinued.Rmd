@@ -1,0 +1,427 @@
+---
+title: "Lecture 4: Binomial models and prior strength"
+author: "Zachary Marion"
+date: "1/30/2017"
+output: pdf_document
+fontsize: 12pt 
+geometry: margin=1in
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(extrafont)
+loadfonts()
+setwd("~/Dropbox/BayesClass/2017 Class/Lecture 4")
+knitr::opts_chunk$set(
+  echo = TRUE,
+  comment = NA,
+  fig.align = "center",
+  fig.height = 2.5,
+  fig.width = 4
+  )
+```
+As before, we need to load some packages and set some options prior to running any models:
+
+```{r stanPackages, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+library(rstan)
+library(shinystan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+```{r, echo=FALSE}
+obs <- c("W", "W", "W", "L", "W")
+```
+
+\section{Exploring binomial models}
+
+\subsection*{Bernoulli model recap}
+Recall from the past few lectures the motivating question has been to estimate the probability $\theta$ of encountering water relative to land on a small model of the Earth (i.e., an inflatable globe). 
+\begin{itemize}
+  \item Can also interpet $\theta$ as the relative proportion of water covering the Earth (or blue covering our model).
+\end{itemize}
+
+As before, our collected data was: `r paste(obs, collapse=" ")`, and as before we will create a Stan model that accounts for the Bernoulli nature of the data with a beta prior. 
+
+```{r, eval=FALSE}
+data {
+  int<lower=0> nObs;                // Total number of obss
+  int<lower=0, upper=1> obs[nObs];  // 1D array of obs
+  real<lower=0> a;                  // a & b are now input as data
+  real<lower=0> b;                  //  rather than hard-coded
+}  
+
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+
+model {
+  theta ~ beta(a,b);                // prior on theta
+  for(n in 1:nObs) {        
+    obs[n] ~ bernoulli(theta);      // bernoulli likelihood     
+  }
+}
+
+```
+Note that I have changed the code slightly so that `a` & `b`---the parameters defining the beta prior---are data rather than hardcoded. This makes the model more flexible down the line.
+
+```{r engine = 'cat', engine.opts = list(file = "ex1Bernoulli.stan", lang = "stan"), echo=FALSE}
+data {
+  int<lower=0> nObs;                // Total number of observations
+  int<lower=0, upper=1> obs[nObs];  // 1D array of observations
+  real<lower=0> a;              // a & b are now input as data
+  real<lower=0> b;              //  rather than hard-coded
+}  
+
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+
+model {
+  theta ~ beta(a,b);                // prior on theta
+  for(n in 1:nObs) {        
+    obs[n] ~ bernoulli(theta);      // bernoulli like. function
+  }
+}
+
+```
+
+We again need to code the data as a list and then run the model using the `stan` function. Similar to last class, `a` & `b` define a flat beta prior:
+
+```{r}
+nObs <- length(obs)
+obs <- rep(c(1,0), times=c(4,1))
+a <- 1.0  
+b <- 1.0 # giving a & b a flat prior
+dat1 <- list(nObs=nObs, obs=obs, a=a, b=b)
+```
+```{r modBern, message=TRUE, warning=TRUE, cache=TRUE, tidy=TRUE}
+modBern <- stan(file="ex1Bernoulli.stan", #path to .stan file
+             data=dat1,
+             iter=2000, # number of MCMC iterations
+             chains=4,  # number of independent MCMC chains
+             seed=3,    # set the seed so run is repeatable
+             verbose=FALSE)  # turn off annoying warnings for notes)
+```
+
+\subsection*{Bernoulli model as a binomial}
+
+The Bernoulli is a special case of the binomial distribution, the likelihood function of which---for the pedantic---is:
+\begin{equation}
+  p(y|N,\theta) = \frac{N!}{y!(N - y)!} \theta^y(1 - \theta)^{N - y}
+\end{equation}
+
+where $y = \sum(W)$.
+
+We can easily streamline and recode the model using a \emph{Binomial} likelihood for more flexibility later:
+
+```{r, eval=FALSE}
+data {
+  int<lower=0> nObs;            // Total number of observations
+  int<lower=0> obs;             // scalar count of Ws
+  real<lower=0> a;              // a & b are now input as data
+  real<lower=0> b;              //  rather than hard-coded
+}  
+
+parameters {
+  real<lower=0, upper=1> theta; // prob. of water
+}
+
+model {
+  theta ~ beta(a,b);            // prior on theta 
+  obs ~ binomial(nObs, theta);  // binomial likelihood function
+}
+
+```
+
+```{r engine = 'cat', engine.opts = list(file = "ex1Binomial.stan", lang = "stan"), echo=FALSE}
+data {
+  int<lower=0> nObs;  // Total number of observations
+  int<lower=0> obs;   // obs as scalar
+  real<lower=0> a;    // a & b are now input as data
+  real<lower=0> b;    //    rather than hard-coded
+}  
+
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+
+model {
+  theta ~ beta(a,b);                // prior on theta
+  obs ~ binomial(nObs, theta);      // binomial likelihood
+}
+
+```
+
+We can recode the data and run the new model:
+
+```{r, tidy=TRUE}
+nObs <- length(obs)
+obs <- sum(obs)
+a <- 1
+b <- 1
+dat2 <-  list(nObs=nObs, obs = obs, a=a, b=b)
+```
+
+```{r modBin1, message=TRUE, warning=TRUE, cache=TRUE, tidy=TRUE}
+modBin1 <- stan(file="ex1Binomial.stan", #path to .stan file
+             data=dat2,
+             iter=2000, # number of MCMC iterations
+             chains=4,  # number of independent MCMC chains
+             seed=3,    # set the seed so run is repeatable
+             verbose=FALSE)  # turn off annoying warnings for notes)
+```
+
+The estimates from both the Bernoulli and Binomial models are identical (minus MCMC variation):
+
+```{r, eval=FALSE}
+print(modBern)
+```
+```{r, echo=FALSE}
+round(summary(modBern)$summary,2)
+```
+
+```{r, eval=FALSE}
+print(modBin1)
+```
+```{r, echo=FALSE}
+round(summary(modBin1)$summary,2)
+```
+
+\subsection*{Alternative parameterizations and prior strength}
+
+As mentioned in an earlier lecture, it is often convienient to specify $a$ and $b$ of a beta prior in terms of the concentration ($\kappa$) and mean ($\mu$):
+\begin{equation}
+   a = \mu \kappa \;\; \mathrm{and} \;\; b = (1 - \mu)\kappa.
+\end{equation}
+
+or---for $\kappa > 2$---mode ($\omega$):
+\begin{equation}
+   a = \omega (\kappa - 2)+1 \;\; \mathrm{and} \;\; b = (1 - \omega)(\kappa - 2) + 1 
+  \end{equation}
+
+We can easily do this by using the `transformed parameters` block of Stan. I will use the mode but the strategy for using the mean is the same.
+
+```{r engine = 'cat', engine.opts = list(file = "binomialMode.stan", lang = "stan"), echo=FALSE}
+data {
+  int<lower=0> nObs;              // Total number of observations
+  int<lower=0> obs;               // obs as scalar
+  real<lower=0, upper=1> omega;  // mode as input data
+  real<lower=2> kappa;           // concentration as input data
+}  
+
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+
+transformed parameters {
+  real<lower=0> a;
+  real<lower=0> b;
+  
+  a = omega * (kappa - 2) + 1;
+  b = (1 - omega) * (kappa - 2) + 1;
+}
+
+model {
+  theta ~ beta(a,b);                // prior on theta
+  obs ~ binomial(nObs, theta);      // likelihood
+}
+
+```
+
+We will read the mode and concentration in as `data`. The `parameters` and `model` blocks doesn't change. After specifying the transformed parameters (`a` & `b`), we write the equations as noted above.  
+
+```{r, eval=FALSE}
+data {
+  int<lower=0> nObs;    // Total number of observations
+  int<lower=0> obs;     // obs as scalar
+  real<lower=0, upper=1> omega;  // mode as input data
+  real<lower=2> kappa;  // concentration 
+}  
+
+...
+
+transformed parameters {
+  real<lower=0> a;
+  real<lower=0> b;
+  
+  a = omega * (kappa - 2) + 1;
+  b = (1 - omega) * (kappa - 2) + 1;
+}
+
+```
+
+Suppose we think there is a 50/50 probability of water. We can see the effect of varying $\kappa$, our confidence in this assumption b y running two models:
+\begin{itemize}
+  \item Completely uninformed: $\omega = 0.5$, $\kappa = 2$ 
+  \item Low confidence: $\omega = 0.5$, $\kappa = 4$
+  \item High confidence: $\omega = 0.5$, $\kappa = 12$
+\end{itemize}
+
+To determine the influence of the prior, One option (for simple models), to exclude the likelihood and look at the posterior distribution of our parameters. We can do this by commenting out the last part of our model, and comparing the parameter estimates with and without the "data."
+
+```{r, eval=FALSE}
+
+...
+
+model {
+  theta ~ beta(a,b);            // prior on theta 
+ // obs ~ binomial(nObs, theta);  // Exclude likelihood
+}
+```
+
+```{r engine = 'cat', engine.opts = list(file = "noLikBinomial.stan", lang = "stan"), echo=FALSE}
+data {
+  int<lower=0> nObs;  // Total number of observations
+  int<lower=0> obs;   // obs as scalar
+  real<lower=0, upper=1> omega;  // mode as input data
+  real<lower=2> kappa;  // concentration 
+}  
+
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+
+transformed parameters {
+  real<lower=0> a;
+  real<lower=0> b;
+  
+  a = omega * (kappa - 2) + 1;
+  b = (1 - omega) * (kappa - 2) + 1;
+}
+
+model {
+  theta ~ beta(a,b);                // prior on theta
+//  obs ~ binomial(nObs, theta);    // Exclude likelihood
+}
+
+```
+
+
+\subsection*{Completely uninformed: $\omega = 0.5$, $\kappa = 2$: }
+
+
+```{r, tidy=TRUE}
+## Essentially Beta(1,1)
+omega <- 0.5
+kappa <- 2
+dat11 <-  list(nObs=nObs, obs = obs, omega=omega, kappa=kappa)
+```
+
+```{r modBin11, message=FALSE, warning=FALSE, cache=TRUE, tidy=TRUE}
+## Beta(1,1) parameterized by mode
+modBin11 <- stan(file="binomialMode.stan", #path to .stan file
+             data=dat11,
+             iter=2000, # number of MCMC iterations
+             chains=4,  # number of independent MCMC chains
+             seed=3,    # set the seed so run is repeatable
+             verbose=FALSE)  # turn off annoying warnings for notes
+```
+
+```{r modNoLik11, message=FALSE, warning=FALSE, cache=TRUE, tidy=TRUE}
+## No likelihood Beta(1,1)
+modNoLik11 <- stan(file="noLikBinomial.stan", #path to .stan file
+             data=dat11,
+             iter=2000, # number of MCMC iterations
+             chains=4,  # number of independent MCMC chains
+             seed=3,    # set the seed so run is repeatable
+             verbose=FALSE)  # turn off annoying warnings for notes
+```
+
+
+```{r, fig.height=2.75, fig.width=7, tidy=TRUE}
+theta11 <- as.matrix(modBin11, par="theta")
+thetaNoLik11 <- as.matrix(modNoLik11, par="theta")
+par(mfrow=c(1,2))
+par(mar=c(4,3,0.1,0.5))
+plot(density(theta11), xlab="theta", las=1, main="", ylab="Density")
+abline(v=omega, lty=2, lwd=2.5, col="red")
+plot(density(thetaNoLik11), xlab="theta", las=1, main="", ylab="")
+abline(v=omega, lty=2, lwd=2.5, col="red")
+```
+
+
+
+\subsection*{Vaguely informed: $\omega = 0.5$, $\kappa = 4$: }
+
+
+```{r, tidy=TRUE}
+## Essentially Beta(2,2)
+omega <- 0.5
+kappa <- 4
+dat22 <-  list(nObs=nObs, obs = obs, omega=omega, kappa=kappa)
+```
+
+```{r modBin22, message=FALSE, warning=FALSE, cache=TRUE, tidy=TRUE}
+## Beta(2,2) parameterized by mode
+modBin22 <- stan(file="binomialMode.stan", #path to .stan file
+             data=dat22,
+             iter=2000, # number of MCMC iterations
+             chains=4,  # number of independent MCMC chains
+             seed=3,    # set the seed so run is repeatable
+             verbose=FALSE)  # turn off annoying warnings for notes
+```
+
+```{r modNoLik22, message=FALSE, warning=FALSE, cache=TRUE, tidy=TRUE}
+## No likelihood Beta(1,1)
+modNoLik22 <- stan(file="noLikBinomial.stan", #path to .stan file
+             data=dat22,
+             iter=2000, # number of MCMC iterations
+             chains=4,  # number of independent MCMC chains
+             seed=3,    # set the seed so run is repeatable
+             verbose=FALSE)  # turn off annoying warnings for notes
+```
+
+```{r, fig.height=2.75, fig.width=7, tidy=TRUE}
+theta22 <- as.matrix(modBin22, par="theta")
+thetaNoLik22 <- as.matrix(modNoLik22, par="theta")
+par(mfrow=c(1,2))
+par(mar=c(4,3,0.1,0.5))
+plot(density(theta22), xlab="theta", las=1, main="", ylab="Density")
+abline(v=omega, lty=2, lwd=2.5, col="red")
+plot(density(thetaNoLik22), xlab="theta", las=1, main="", ylab="")
+abline(v=omega, lty=2, lwd=2.5, col="red")
+```
+
+
+
+\subsection*{Strongly informed: $\omega = 0.5$, $\kappa = 20$: }
+
+
+```{r,, tidy=TRUE}
+## Essentially Beta(10,10)
+omega <- 0.5
+kappa <- 20
+dat1010 <-  list(nObs=nObs, obs = obs, omega=omega, kappa=kappa)
+```
+
+```{r modBin10, message=FALSE, warning=FALSE, cache=TRUE, tidy=TRUE}
+## Beta(2,2) parameterized by mode
+modBin1010 <- stan(file="binomialMode.stan", #path to .stan file
+             data=dat1010,
+             iter=2000, # number of MCMC iterations
+             chains=4,  # number of independent MCMC chains
+             seed=3,    # set the seed so run is repeatable
+             verbose=FALSE)  # turn off annoying warnings for notes
+```
+
+```{r modNoLik10, message=FALSE, warning=FALSE, cache=TRUE, tidy=TRUE}
+## No likelihood Beta(1,1)
+modNoLik1010 <- stan(file="noLikBinomial.stan", #path to .stan file
+             data=dat1010,
+             iter=2000, # number of MCMC iterations
+             chains=4,  # number of independent MCMC chains
+             seed=3,    # set the seed so run is repeatable
+             verbose=FALSE)  # turn off annoying warnings for notes
+```
+
+```{r, fig.height=2.75, fig.width=7, tidy=TRUE}
+theta1010 <- as.matrix(modBin1010, par="theta")
+thetaNoLik1010 <- as.matrix(modNoLik1010, par="theta")
+par(mfrow=c(1,2))
+par(mar=c(4,3,0.1,0.5))
+plot(density(theta1010), xlab="theta", las=1, main="", ylab="Density")
+abline(v=omega, lty=2, lwd=2.5, col="red")
+plot(density(thetaNoLik1010), xlab="theta", las=1, main="", ylab="")
+abline(v=omega, lty=2, lwd=2.5, col="red")
+```
+
