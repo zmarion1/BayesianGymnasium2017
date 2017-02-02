@@ -1,0 +1,344 @@
+---
+title: "Lecture 5: Summarizing posterior distributions"
+output: pdf_document
+fontsize: 12pt 
+geometry: margin=1in
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(extrafont)
+loadfonts()
+setwd("~/Dropbox/BayesClass/2017 Class/Lecture 5")
+knitr::opts_chunk$set(
+  echo = TRUE,
+  comment = NA,
+  fig.align = "center",
+  fig.height = 2.5,
+  fig.width = 4
+  )
+```
+As before, we need to load some packages and set some options prior to running any models:
+
+```{r stanPackages, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+library(rstan)
+library(shinystan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+source("../utilityFunctions.R")
+```
+
+\section{Summarizing posterior samples}
+
+As a motivating example, suppose 5 people tossed our inflatable model Earth in the air 1--4 times each. Their results were:
+
+```{r, echo=FALSE, results='asis'}
+set.seed(2)
+nObs <- 5
+N <- round(runif(nObs, 1,4),digits=0)
+obs <- rbinom(nObs, size = N, prob=0.95)
+temp <- as.matrix(rbind(N,obs))
+rownames(temp) <- c("N","W")
+kable(temp, row.names=TRUE, col.names=c(rep("",5)))
+```
+
+Depending on the question of interest, we may want to know things like:
+
+  * Which parameter value has the highest posterior probability?
+  * Which parameter value marks the lower 5% of the posterior probability?
+  * How much posterior probability lies between some values?
+  * How much posterior probability lies above some value?
+
+These usually boil down to questions about:
+
+  1. point estimates
+  2. intervals of defined boundries
+  3. intervals of defined probability mass.
+
+We can answer these questions with a Stan model using a binomial likelihood:
+
+```{r, eval=FALSE}
+data {
+  int<lower=0> nObs;  // Total number of observations
+  int<lower=0> N[nObs];
+  int<lower=0> obs[nObs];   // obs as scalar
+  real<lower=0, upper=1> omega;  // mode as input data
+  real<lower=2> kappa;  // concentration 
+}  
+
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+
+transformed parameters {
+  real<lower=0> a;
+  real<lower=0> b;
+  
+  a = omega * (kappa - 2) + 1;
+  b = (1 - omega) * (kappa - 2) + 1;
+}
+
+model {
+  theta ~ beta(a,b);                // prior on theta
+  obs ~ binomial(N, theta);    
+}
+
+```
+```{r engine = 'cat', engine.opts = list(file = "binomialMode.stan", lang = "stan"), echo=FALSE}
+data {
+  int<lower=0> nObs;  // Total number of observations
+  int<lower=0> N[nObs];
+  int<lower=0> obs[nObs];   // obs as scalar
+  real<lower=0, upper=1> omega;  // mode as input data
+  real<lower=2> kappa;  // concentration 
+}  
+
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+
+transformed parameters {
+  real<lower=0> a;
+  real<lower=0> b;
+  
+  a = omega * (kappa - 2) + 1;
+  b = (1 - omega) * (kappa - 2) + 1;
+}
+
+model {
+  theta ~ beta(a,b);                // prior on theta
+  obs ~ binomial(N, theta);    
+}
+
+```
+
+  * Note that, as last time, I am specifying a flat prior on $\theta$ in terms of the mode ($\omega = 0.5$) and concentration ($\kappa = 2$)
+
+```{r, tidy=TRUE,  message=FALSE, warning=FALSE, cache=TRUE}
+nObs <- 5
+N <- c(2, 3, 3, 2, 4)
+obs <- c(1, 3, 3, 2, 4)
+omega <- 0.5
+kappa <- 2
+
+dat <- list(nObs=nObs, N=N, obs=obs, omega=omega, kappa=kappa)
+
+mod1 <- stan(file="binomialMode.stan", #path to .stan file
+  data=dat,
+  iter=2000, # number of MCMC iterations
+  chains=4,  # number of independent MCMC chains
+  seed=3, 
+  verbose = FALSE) # get rid of stupid messages and warnings 
+
+theta <- as.matrix(mod1, "theta")
+```
+
+\subsection*{1) Point estimates} 
+Because the posterior is a distribution, it usually makes more sense to think in terms of intervals. However, we like single numbers, so
+given the entire posterior distribution, which point estimate should we report? 
+
+
+We have already talked about the mean and median and how the median is often more appropriate for skewed samples. We can approximate the value with the highest posterior probability, the \emph{maximum a posteriori} (MAP) estimate.
+
+```{r, fig.height=3.5, fig.width=4}
+thetaDens <- as.data.frame(density(theta, from=0, to=1, n=1024, adjust=2)[1:2])
+MAP <- thetaDens$x[which.max(thetaDens$y)]
+plot(thetaDens, xlim = c(0,1), xlab="theta", main="", las=1, type="l")
+abline(v=c(mean(theta), median(theta), MAP), lty=1:3, 
+  col=c("black", "blue", "red"), lwd=2)
+```
+
+However, MAP estimates should be used with caution. 
+  
+  * Approximation is sample size (and density function algorithm) dependent 
+  
+  * They are not invariant under reparamaterization.
+  
+In contrast, the mean and median are optimal under squared-error and linear-error loss functions.  
+
+\subsection*{Intervals of defined boundries}
+
+We may be interested in summarizing the posterior in terms of a frequency above, below, or in between certain values. For example, the probability the proportion of water on our globe is less than 0.75 or between 0.8--0.9: 
+```{r, fig.height=3.5, fig.width=4}
+sum(theta < 0.75)/length(theta) # less than 0.75
+int <- thetaDens[thetaDens$x < 0.75,]
+sum(theta > 0.8 & theta < 0.9)/sum(theta)
+plot(thetaDens, xlim = c(0.25,1), xaxs = "i", yaxs = "i", main="",
+  las = 1, type = "l", bty="l")
+polygon(x=c(int$x, rev(int$x)), y=c(rep(0,dim(int)[1]), rev(int$y)), col="blue")
+```
+
+
+\subsection*{Intervals of defined probability mass}
+Usually we are most interested in uncertainty intervals. For example, most people report the middle 95% UI in papers, which is easy to calculate using `quantile`:
+```{r}
+quantile(theta, probs=c(0.025, 0.975))
+```
+
+These are not difficult to calculate and do a good job at communicating the shape of the distribution unless the posterior is asymmetrical. However, they can be a bit misleading. We can use the`plotInterval` function I wrote and plot the 50% CI to see this:
+```{r, fig.height=3.5, fig.width=4}
+round(quantile(theta,c(0.25, 0.75)),2)
+plotInterval(theta, probs=c(0.25,0.75), HDI=FALSE, col="blue")
+```
+
+Because equal probability mass is in the upper and lower tails, it excludes parameter values > $\approx$ `r round(quantile(theta,0.75),2)` despite their having a high probability. 
+
+In contrast, \emph{the highest density interval} (HDI) is the narrowest interval containing the specified probability mass.
+
+* i.e., the densest interval most consistent with the data
+* can calculate using the utility function I wrote called (suprise) `HDI`
+
+```{r, eval=FALSE}
+HDI(theta, credMass=0.5)
+```
+```{r, echo=FALSE}
+round(HDI(theta, credMass=0.5),2)
+```
+```{r, fig.height=3.5, fig.width=4}
+plotInterval(theta,, HDI=TRUE, interval=0.5, col="blue")
+```
+This interval captures the parameter values with the highest probability and is often narrower than the equal-tailed interval.
+
+
+In most cases, the equal tailed and HD intervals are similar. It is only when distributions are strongly skewed that they differ. 
+
+The disadvantage of the HDI is that it can be computationally intensive and, more important, is more sensitive to simulation variance.
+
+  * For example, look at the difference in confidence at the tails when running our previous model for 200 iterations vs the previous 4000 iterations:
+  
+```{r, tidy=TRUE,  message=FALSE, warning=FALSE, cache=TRUE}
+
+mod200 <- stan(file="binomialMode.stan", #path to .stan file
+  data=dat,
+  iter=100, # number of MCMC iterations
+  chains=4,  # number of independent MCMC chains
+  seed=3, 
+  verbose = FALSE) # get rid of stupid messages and warnings 
+
+theta200 <- as.matrix(mod200, "theta")
+HDI(theta200,0.5) # 200 iterations
+HDI(theta,0.5) # 4000 iterations
+```
+
+If we extract the estimates for theta and plot the posterior as a "bird's eye view," the sampling in the tails of the distribution is more sparse, while the point estimates are often similar. 
+
+  * This is especially a problem for complex hierarchical models
+
+```{r,fig.height=2.75, fig.width=7}
+par(mfrow=c(1,2))
+par(mar=c(3,3,0.1,0.5))
+
+# using a grey50 with 50% transparency
+plot(theta200, pch=16, col="#50505050",las=1, ylim=c(0.5,1))
+plot(theta, pch=16, col="#50505050",las=1, ylim=c(0.5,1))
+```
+
+
+\section{Posterior predictive simulation}
+Bayesian models make it very easy to simulate new data. This is useful for several reasons, notably 
+
+  1. Model validation
+  2. Prediction
+  3. Power analysis
+  
+For model validation, if the model is a good fit then we should be able to use it to generate data that looks like the data we observed. To generate this data, we use the \emph{posterior predictive distribution}:
+
+\begin{equation}
+  p(\tilde{y}|y) \sim \int p(\tilde{y}|\theta)p(\theta|y) d\theta
+\end{equation}
+
+For each draw of $\theta$ from the posterior $p(\theta|y)$ we simulate data $\tilde{y}$ from the posterior predictive distribution $p(\tilde{y}|y)$. 
+
+To do posterior predictive simulation, we need to use a new Stan model block: `generated quantities`. This comes after the `model` block.
+
+```{r, eval=FALSE}
+generated quantities {
+  int yNew[nObs];       // define new object
+  
+  for (n in 1:nObs) {   
+    yNew[n] = binomial_rng(N[n], theta);
+  }
+}
+```
+
+```{r engine = 'cat', engine.opts = list(file = "binomialGQ.stan", lang = "stan"), echo=FALSE}
+data {
+  int<lower=0> nObs;  // Total number of observations
+  int<lower=0> N[nObs];
+  int<lower=0> obs[nObs];   // obs as scalar
+  real<lower=0, upper=1> omega;  // mode as input data
+  real<lower=2> kappa;  // concentration 
+}  
+
+parameters {
+  real<lower=0, upper=1> theta;     // prob. of water
+}
+
+transformed parameters {
+  real<lower=0> a;
+  real<lower=0> b;
+  
+  a = omega * (kappa - 2) + 1;
+  b = (1 - omega) * (kappa - 2) + 1;
+}
+
+model {
+  theta ~ beta(a,b);                // prior on theta
+  obs ~ binomial(N, theta);    
+}
+
+generated quantities {
+  int yNew[nObs];       // define new data array
+
+  for (n in 1:nObs) {   
+    yNew[n] = binomial_rng(N[n], theta);
+  }
+}
+
+```
+Note that the random number generators that Stan uses are not vectorized, so you have to use loops.
+
+
+To illustrate the utility of posterior predictive simulations, we are going to simulate some globe tosses. We will also use a very weakly informed `beta(2,2)` prior.
+```{r, message=FALSE, warning=FALSE}
+set.seed(2)
+nObs <- 20
+N <- round(runif(nObs, 4,10),digits=0)
+obs <- rbinom(nObs, size = N, prob=0.73)
+omega <- 0.5
+kappa <- 4
+dat1 <-  list(nObs=nObs, N=N, obs = obs, omega=omega, kappa=kappa)
+
+modGQ <- stan(file="binomialGQ.stan", #path to .stan file
+  data=dat1,
+  iter=2000, # number of MCMC iterations
+  chains=4,  # number of independent MCMC chains
+  seed=3, 
+  verbose = FALSE) # get rid of stupid messages and warnings 
+
+yNew <- as.matrix(modGQ, "yNew")
+```
+
+
+The first diagnostic we can use is often called a Bayesian "p-value." For each iteration, we take the average number of times that $y > \tilde{y}$ and then average across iterations. The value should be between 0--1, and ideally, be close to 0.5. 
+
+  * Values close to 0 or 1 are indicative of a mis-specified model
+```{r}
+obsMat <- t(replicate(obs,n = nrow(yNew), simplify=TRUE))
+mean(apply(obsMat > yNew, 2, mean))
+```
+We can also plot the mean or median values of $\tilde{y}$ against the original data. If our model is doing a good job, the data should  fall on a a 45 degree line with no systematic over or underestimation.
+
+```{r,fig.height=3.5, fig.width=4}
+yAvg <- apply(yNew,2, median)
+plot(yAvg, obs, las=1, pch=16)
+abline(a=0,b=1)
+```
+
+The `shinystan` package has a nice interface for posterior predictive simulation.
+
+
+
+
+
+
