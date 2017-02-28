@@ -1,7 +1,7 @@
 data {
   int<lower=0> nObs;          // No. obs.
-  vector<lower=0>[nObs] BM;   // biomass observations
-  vector<lower=0>[nObs] terpenes;
+  vector[nObs] BM;   // biomass observations
+  vector[nObs] terpenes;
   real<lower=0> aMean;       // mean of prior alpha
   real<lower=0> aSD;         // SD of prior alpha
   real<lower=0> bSD;          // SD of prior beta
@@ -26,5 +26,12 @@ model {
   sigma ~ cauchy(0, sigmaSD);
 
   BM ~ normal(mu, sigma);
+}
+
+generated quantities {
+  vector[nObs] newBM;
+  
+  for (n in 1:nObs)
+    newBM[n] = normal_rng(mu[n], sigma);
 }
 
