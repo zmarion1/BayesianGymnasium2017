@@ -1,0 +1,332 @@
+---
+title: "Lecture 8.4: Multiple regression part IV: finishing up interactions"
+output: pdf_document
+fontsize: 12pt 
+geometry: margin=1in
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(extrafont)
+loadfonts()
+setwd("~/Dropbox/BayesClass/2017 Class/Lecture 8")
+knitr::opts_chunk$set(
+  echo = TRUE,
+  comment = NA,
+  fig.align = "center",
+  fig.height = 3,
+  fig.width = 4
+  )
+```
+\emph{* This lecture is based on chapter 7 of Statistical Rethinking by Richard McElreath.}
+
+As always, we need to load some packages and set some options prior to running any models:
+
+```{r stanPackages, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+library(rstan)
+library(shinystan)
+library(car)
+library(xtable)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+source("../utilityFunctions.R")
+```
+
+Last lecture, I introduced interaction terms using the GDP dataset. 
+  * Recall we were interested in predicting `log(GDP)` in African/non-African countries as a function of terrain ruggedness.
+
+
+```{r}
+rugged <- read.csv("RuggedGDP.csv")
+rugged <- rugged[order(rugged$rugged),]
+afr <- rugged[rugged$africa == 1, ] # African dataset
+nafr <- rugged[rugged$africa == 0, ] # non-African dataset
+afr <- afr[order(afr$rugged),]
+nafr <- nafr[order(nafr$rugged),]
+```
+
+We wanted the relationship between $obs$ and $R$ to vary as a function of $A$. 
+$$
+\begin{aligned}
+  obs_i     &\sim \mathrm{Normal}(\mu_i, \sigma)  \nonumber  \\ 
+  \mu_i     &= \alpha + \gamma_i R_{i} + \beta_A A_{i} \nonumber \\
+  \gamma_i  &= \beta_R + \beta_{AR} A_i \nonumber
+\end{aligned}    
+$$
+Our Bayesian model had two linear models in it: 
+
+  1. The first line is the same Gaussian likelihood we all know and love.
+ 
+  2. The second line is the same additive definition of $\mu_i$.
+ 
+  3. The third line uses $\gamma$ as a placeholder for our new linear function that defines the slope between `log(GDP)` and `rugged`.
+      * $\gamma_i$ is the linear interaction effect of ruggedness and African nations
+     
+$\gamma_i$ explicitly models the hypothesis that the slope between GDP and ruggedness is \emph{conditional} on whether a nation is on the African continent with $\beta_{AR}$ describing the strength of that dependence.
+
+  * If $\beta_{AR}=0$, then we get our original likelihood function back. 
+    + For any nation not in Africa, $A_i=0$ and so $\beta_{AR}$ has no effect.
+  * If $\beta_{AR}>1$, African nations have a more positive slope between GDP and ruggedness. 
+  * if $\beta_{AR}<1$, African nations have a more negative slope
+
+
+When we created our `Stan` model last lecture, we used the conventional notation by substituting in $\gamma_i$:
+$$
+\begin{aligned}
+  \gamma_i  &= \beta_R + \beta_{AR} A_i \nonumber \\
+  \mu_i     &= \alpha + \gamma_i R_{i} + \beta_A A_{i} \nonumber \\
+            &= \alpha + (\beta_R + \beta_{AR} A_i) R_{i} + \beta_A A_{i} \nonumber \\
+            &= \alpha + \beta_R R_i + \beta_{AR} A_iR_{i} + \beta_A A_{i}. \nonumber
+\end{aligned}    
+$$
+This form is much easier to code in `Stan`. 
+
+
+I left the first model for you to try as a homework because 1) it is more explicit; 2) it will be easier to interpret the results; and 3) understanding this form will help in understanding (and building) more complex hierarchical models later. 
+
+  * There are about 5 different ways to code the first model. The easiest is to do the following:
+
+```{r, eval=FALSE}
+data {
+  int<lower=0> nObs;
+  vector[nObs] obs;
+  vector[nObs] R;
+  vector[nObs] A;
+  real<lower=0> aMu;      // mean of prior alpha
+  real<lower=0> aSD;      // SD of prior alpha
+  real<lower=0> bMu;      // mean of prior betas
+  real<lower=0> bSD;      // SD of prior beta
+  real<lower=0> sigmaSD;  // scale for sigma
+}
+
+parameters {
+  real alpha;
+  real betaR;
+  real betaA;
+  real betaAR;
+  real<lower=0> sigma;
+}
+
+transformed parameters {
+  vector[nObs] mu;
+  vector[nObs] gamma;
+  
+  gamma = betaR + betaAR*A;
+  // elementwise multiplication (.*)!
+  mu = alpha + gamma .* R + betaA*A; 
+}
+
+model {
+  alpha ~ normal(aMu, aSD);
+  betaR ~  normal(bMu, bSD);
+  betaA ~  normal(bMu, bSD);
+  betaAR ~  normal(bMu, bSD);
+  sigma ~ cauchy(0, sigmaSD);
+
+  obs ~ normal(mu, sigma);
+}
+
+```
+
+```{r engine = 'cat', engine.opts = list(file = "intrxnMod8.4.stan", lang = "stan"), echo=FALSE}
+data {
+  int<lower=0> nObs;
+  vector[nObs] obs;
+  vector[nObs] R;
+  vector[nObs] A;
+  real<lower=0> aMu;      // mean of prior alpha
+  real<lower=0> aSD;      // SD of prior alpha
+  real<lower=0> bMu;      // mean of prior betas
+  real<lower=0> bSD;      // SD of prior beta
+  real<lower=0> sigmaSD;  // scale for sigma
+}
+
+parameters {
+  real alpha;
+  real betaR;
+  real betaA;
+  real betaAR;
+  real<lower=0> sigma;
+}
+
+transformed parameters {
+  vector[nObs] mu;
+  vector[nObs] gamma;
+  
+  gamma = betaR + betaAR*A;
+  // elementwise multiplication (.*)!
+  mu = alpha + gamma .* R + betaA*A; 
+}
+
+model {
+  alpha ~ normal(aMu, aSD);
+  betaR ~  normal(bMu, bSD);
+  betaA ~  normal(bMu, bSD);
+  betaAR ~  normal(bMu, bSD);
+  sigma ~ cauchy(0, sigmaSD);
+
+  obs ~ normal(mu, sigma);
+}
+
+```
+
+Could also do the following:
+```{r, eval=FALSE}
+transformed parameters {
+  vector[nObs] mu;
+  vector[nObs] gamma;
+  
+  gamma = betaR + betaAR*A;
+  mu = alpha + to_vector(gamma * R') + betaA*A;
+}
+```
+
+The ' symbol means transpose and turns a `nObs` $\times$ 1 `vector` into a 1 $\times$ `nObs` vector for proper matrix multiplication (and results in a `nObs` $\times$ 1) output matrix). 
+ 
+ 
+ * Through the vaguries of Stan, you can't add together matrices and vectors. Therefore we coerce `gamma` $\times$ `R` into a vector using `to_vector()`.
+ 
+ * Alternatively we could just define `R` as a `row_vector` in the `data` block and skip the transpose.
+
+Regardless of which model we use, we get the same results. If we run either model 
+
+```{r, message=FALSE, warning=FALSE, cache=TRUE, verbose=FALSE}
+# African linear regression
+X <- model.matrix(~rugged*africa, data=rugged)[,2:4]
+intDat <- list(nObs=nrow(rugged), obs=log(rugged$GDP),
+  R=X[,"rugged"], A=X[,"africa"], aMu=0, aSD=20, bMu=0, bSD=1, sigmaSD=10)
+
+intxnMod <- stan(file="intrxnMod8.4.stan", data=intDat, iter=2000,
+ chains=4, seed=867.5309)
+mu <- as.matrix(intxnMod, "mu")
+muHDI <- apply(mu, 2, HDI, credMass=0.95)
+muMn <- colMeans(mu)
+```
+
+```{r, fig.height=2.6, fig.width=7, echo=FALSE}
+par(mar=c(3,3.2,0.1,0.5))
+par(mfrow=c(1,2))
+### AFRICA
+# Mean & HDI
+afrHDI <- muHDI[,rugged$africa==1]
+afrMean <- muMn[rugged$africa==1]
+
+### not AFRICA
+# Mean & HDI
+nHDI <- muHDI[,rugged$africa==0]
+nMean <- muMn[rugged$africa==0]
+
+### AFRICA
+x <- afr$rugged
+y <- log(afr$GDP)
+plot(x, y, type="n", las=1, bty="l")
+mtext(text = "Ruggedness", side=1, line = 2, cex=1)
+mtext(text = "log(GDP)", side=2, line = 2.2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+polygon(x=c(x, rev(x)), y=c(afrHDI[1,],
+  rev(afrHDI[2,])), col="#50505080", border="black")
+
+# plot the data points and mean regression line
+points(x, y, pch=1, col="blue")
+lines(afrMean~x, col="black", lwd=2)
+
+### NOT AFRICA
+# Make an empty plot
+x <- nafr$rugged
+y <- log(nafr$GDP)
+plot(x, y, type="n", las=1, bty="l")
+mtext(text = "Ruggedness", side=1, line = 2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+polygon(x=c(x, rev(x)), y=c(nHDI[1,],
+  rev(nHDI[2,])), col="#50505080", border="black")
+
+# plot the data points and mean regression line
+points(x, y, pch=1, col="black")
+lines(nMean~x, col="black", lwd=2)
+```
+
+we find a positive relationship between `log(GDP)` and `ruggedness` for African nations and a negative relationship for non-African nations.
+
+\subsection*{Interpreting interaction terms}
+Interpreting interaction terms is not easy
+
+* Plotting out the results is usually best for model inference.
+* However, there are times when interpretation of the parameter estimates themselves is of value.
+
+There are two reasons why interpreting tables of parameter estimates from models with interaction terms is challenging:
+
+  1. *Adding an interaction to the model changes parameter meanings.* Usually, the distribution of a ``main effect'' coefficent in an interaction model can not be directly compared to a term of the same name in a non-interaction model.
+
+  2. *Interpreting tables of interaction effects require thinking about parameter covariance.* This is a lot harder when the influence of a predictor depends on multiple parameters.
+
+\subsection*{Adding an interaction to the model changes parameter meanings:}
+
+In a simple linear regression without interaction terms, each predictor variable is independent and directly measures that variable's influence.
+  
+  * Not so for models with interaction terms
+
+If we look at our likelihood function again, 
+$$
+\begin{aligned}
+  obs_i     &\sim \mathrm{Normal}(\mu_i, \sigma)  \nonumber  \\ 
+  \mu_i     &= \alpha + \gamma_i R_{i} + \beta_A A_{i} \nonumber \\
+  \gamma_i  &= \beta_R + \beta_{AR} A_i \nonumber
+\end{aligned}
+$$
+a change in $\mu_i$ is dependent on a unit change in $R_i$ is governed by $\gamma_i$. 
+ 
+  * $\gamma_i$ is a function of $\beta_R$, $\beta_{AR}$, and $A_i$; we need to know all three to interpret the effect of $R_i$ on the outcome. 
+    + Only when $A_i=0$ can we interpret the slope $\beta_R$ because then $\gamma_i=\beta_R$.
+
+Practically, this means interpreting tables of the estimates requires some math. If we want to estimate the effect of ruggedness on `log(GDP)` within Africa
+```{r}
+round(summary(intxnMod, pars=c("alpha", "betaR", "betaA",
+  "betaAR"), probs = c(0.025, 0.5, 0.975))$summary,2)
+```
+If we want to estimate the effect of ruggedness on `log(GDP)` within Africa,
+$$
+\begin{aligned}
+  \gamma = \beta_R + \beta_{AR}(1) = -0.19 + 0.35 = 0.16.
+\end{aligned}
+$$
+Outside of Africa, 
+$$
+\begin{aligned}
+  \gamma = \beta_R + \beta_{AR}(0) = -0.19 = -0.19,
+\end{aligned}
+$$
+
+so the relationship is essentially reversed. 
+
+\subsection*{Interpreting tables of interaction effects require thinking about parameter covariance:}
+
+But those are only point estimates of the marginal values. If we really want to compare the effects between African and non-African countries, we have to consider the whole posterior distribution:
+```{r}
+slopes <- as.matrix(intxnMod, pars=c("betaR", "betaAR"))
+gammaA <- slopes[,"betaR"] + slopes[,"betaAR"]*1
+gammaNA <- slopes[,"betaR"] + slopes[,"betaAR"]*0
+mean(gammaA)
+mean(gammaNA)
+```
+The means are almost identical to those above.
+
+```{r,fig.height=2.6, fig.width=7, echo=FALSE}
+par(mar=c(3,3.2,0.1,0.5))
+par(mfrow=c(1,2))
+plot(density(gammaNA), main="", xlim=c(-0.5,0.6), col="black",
+  lwd=2, las=1)
+lines(density(gammaA), col="blue",lwd=2)
+mtext(text = expression(gamma), side=1, line = 2, cex=1.2)
+mtext(text = expression(p(gamma)), side=2, line = 1.9, cex=1.2)
+text(0.3,4, "Africa")
+text(0.05, 5, "Not Africa")
+plot(density(gammaA-gammaNA), main="", xlim=c(-0.2,0.8),
+  col="red",lwd=2, lty=1, las=1)
+mtext(text = expression(paste(Delta," ", gamma)), side=1, line = 2, cex=1.2)
+```
+
+But we can also plot the full distributions together, or the diference in the distributions. Note that the proportion of the differences less than zero is only `r sum(gammaA-gammaNA < 0)/nrow(slopes)`
+
+* much less than the overlap of the marginal distributions suggests. 

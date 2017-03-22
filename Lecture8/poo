@@ -1,0 +1,7 @@
+transformed parameters {
+  vector[nObs] mu;
+  vector[nObs] gamma;
+  
+  gamma = betaR + betaAR*A;
+  mu = alpha + to_vector(gamma * R') + betaA*A;
+}

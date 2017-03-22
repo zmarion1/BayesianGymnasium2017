@@ -1,0 +1,655 @@
+---
+title: "Lecture 8.1: Multiple regression part I"
+output: pdf_document
+fontsize: 12pt 
+geometry: margin=1in
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(extrafont)
+loadfonts()
+setwd("~/Dropbox/BayesClass/2017 Class/Lecture 8")
+knitr::opts_chunk$set(
+  echo = TRUE,
+  comment = NA,
+  fig.align = "center",
+  fig.height = 3,
+  fig.width = 4
+  )
+```
+\emph{* This lecture is based on chapter 4 of Statistical Rethinking by Richard McElreath.}
+
+As before, we need to load some packages and set some options prior to running any models:
+
+```{r stanPackages, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+library(rstan)
+library(shinystan)
+library(car)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+source("../utilityFunctions.R")
+```
+
+Now that we have simple linear regression down and we understand what's going on, let's expand our modeling to encompass multiple predictor variables to model an outcome. 
+
+
+There are several good reasons to do this:
+
+1. *Statistical control of confounding variables:* Confounding variables are variables that may be correlated with another variable of interest, sometimes leading to spurious associations of effect.
+      * example: Waffle House density is strongly associated with divorce rates, not because frequenting Waffle Houses leads to divorce (well maybe) but because the highest densities of Waffle house are in the South, where the highest divorce rates occur.
+    * Confounding variables can also mask effects (e.g., Simpson's paradox)
+    
+2.  *Multiple causation:*  Phenomena or biological processes may be truely driven by multiple causes.
+
+3. *Interactions:* Even when variables are uncorrelated, the importance of each may depend on the other.
+    * e.g., Plants need both light and water. In the absence of one, the other has no benefit at all. 
+    
+**BUT**, multiple predictors can hurt too, and we will talk about things like *multicollinearity* and demonstrate why the variance inflation factor (back in Biometry) gets that name.
+
+\section{Spurious correlations}
+
+For our first example of multiple regression, we will use simulated data of apparent competition between sea urchins and chitons in the presence of sea stars. Chitons are the preferred prey of sea stars (urchins are pokey), but sea stars will eat urchins opportunistically. 
+
+  * Say you go out to rocky reefs outcrops ($N=53$) and measure the densities of all three marine invertebrates in multiple quadrats, then average the densities to get a mean invertebrate density at each outcrop. 
+      * The code to simulate this is below if interested 
+
+
+
+
+```{r}
+N <- 53
+set.seed(1)
+seaStars <- rnorm(N) + 10 # Real X variable
+chitons <- rnorm(N, seaStars) # Spurious X variable
+urchins <- rnorm(N,-seaStars, 1.5) 
+urchins <- urchins - min(urchins)
+
+reefs <- data.frame(urchins=urchins, seaStars=seaStars, chitons=chitons)
+# write.csv(reefs, file="urchinDat.csv", row.names=FALSE)
+```
+
+```{r}
+reefs <- read.csv("urchinDat.csv")
+head(reefs)
+```
+
+To begin, let's analyze the predictor variables separately with a  univariate regression and see what's going on. 
+
+Our model will look very similar to last week, but we are going to standardize the predictor. This is useful for a few reasons:
+
+1. *Interpretation:* A change of one unit is equivalent to a change of one SD. This may be more interesting and revealing than the natural scale. 
+      * Makes comparison of multiple predictors easier
+
+2. *Computation:* when predictors (or responses) have large values in them or a wide range of values, defining appropriate priors  can be challenging. 
+
+  
+\begin{align}
+  obs_i    &\sim \mathrm{Normal}(\mu_i, \sigma)  \nonumber  \\ 
+  \mu_i     &= \alpha + \beta x_i        \nonumber  \\         
+  \alpha  &\sim \mathrm{Normal}(0, 10)                 \\
+  \beta   &\sim \mathrm{Normal}(0, 1)        \nonumber   \\
+  \sigma  &\sim \mathrm{Cauchy^+}(0, 10)      \nonumber
+\end{align}
+
+Because we $z$-transformed, we can set much narrower priors. 
+
+Our model, `uniMod.stan`, is formulated as follows:
+
+```{r, eval=FALSE}
+data {
+  int<lower=0> nObs;  
+  vector[nObs] obs;   
+  vector[nObs] xvar;      // x variable
+  real<lower=0> aSD;      // SD of prior alpha
+  real<lower=0> bSD;      // SD of prior beta
+  real<lower=0> sigmaSD;  // scale for sigma
+}
+
+parameters {
+  real alpha;
+  real beta;
+  real<lower=0> sigma;
+}
+
+transformed parameters {
+  // can be useful for plotting purposes
+  vector[nObs] mu;
+  mu = alpha + beta*xvar;
+}
+
+model {
+  alpha ~ normal(0, aSD);
+  beta ~  normal(0, bSD);
+  sigma ~ cauchy(0, sigmaSD);
+
+  obs ~ normal(mu, sigma);
+}
+
+```
+
+
+```{r engine = 'cat', engine.opts = list(file = "uniMod.stan", lang = "stan"), echo=FALSE}
+data {
+  int<lower=0> nObs;  
+  vector[nObs] obs;   
+  vector[nObs] xvar;      // x variable
+  real<lower=0> aSD;      // SD of prior alpha
+  real<lower=0> bSD;      // SD of prior beta
+  real<lower=0> sigmaSD;  // scale for sigma
+}
+
+parameters {
+  real alpha;
+  real beta;
+  real<lower=0> sigma;
+}
+
+transformed parameters {
+  // can be useful for plotting purposes
+  vector[nObs] mu;
+  mu = alpha + beta*xvar;
+}
+
+model {
+  alpha ~ normal(0, aSD);
+  beta ~  normal(0, bSD);
+  sigma ~ cauchy(0, sigmaSD);
+
+  obs ~ normal(mu, sigma);
+}
+
+```
+
+First we will run the chiton model, 
+```{r, message=FALSE, warning=FALSE, cache=TRUE, verbose=FALSE}
+nObs <- nrow(reefs)
+urchins <- reefs$urchins
+chitons <- reefs$chitons
+seaStars <- reefs$seaStars
+
+### Chiton model
+o <- order(chitons)
+chitonDat <- list(nObs=nObs, obs=urchins[o], xvar=as.vector(scale(chitons[o])), 
+  aSD=10, bSD=1, sigmaSD=10)
+
+chitMod <- stan(file="uniMod.stan", data=chitonDat, iter=2000, 
+ chains=4, seed=3)
+ 
+# extract posterior estimates of alpha, beta, and mu
+chitPar <- as.matrix(chitMod, pars=c("alpha", "beta", "mu"))
+```
+
+
+Then the sea star model,
+```{r, message=FALSE, warning=FALSE, cache=TRUE, verbose=FALSE}
+# Sea star model
+o <- order(seaStars)
+starDat <- list(nObs=nObs, obs=urchins[o], xvar=as.vector(scale(seaStars[o])), 
+  aSD=10, bSD=1, sigmaSD=10)
+
+starMod <- stan(file="uniMod.stan", data=starDat, iter=2000, 
+ chains=4, seed=3)
+ 
+# extract posterior estimates of alpha, beta, and mu
+starPar <- as.matrix(starMod, pars=c("alpha", "beta", "mu"))
+```
+
+The first thing we might want to do is print a summary of our results and look graphically.
+
+
+```{r, fig.height=3, fig.width=7}
+par(mar=c(3,3.2,0.1,0.5))
+par(mfrow=c(1,2))
+# Mean & HDI for chitons
+chitHDI <- apply(chitPar,2, HDI, credMass=0.95)
+chitMean <- colMeans(chitPar)
+
+# Make an empty plot
+x <- chitonDat$xvar
+y <- chitonDat$obs
+plot(x, y, type="n", las=1, bty="l")
+
+mtext(text = "Urchin density", side=2, line = 2.2, cex=1)
+mtext(text = "Chiton density", side=1, line = 2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+polygon(x=c(x, rev(x)), y=c(chitHDI[1, -c(1:2)], 
+  rev(chitHDI[2, -c(1:2)])), col="#50505080", border="grey80")
+
+# plot the data points and mean regression line
+points(x, y, pch=16, col="red")
+abline(a=chitMean[1], b=chitMean[2], col="red", lwd=2)
+
+### Plot seastar resutls
+starHDI <- apply(starPar,2, HDI, credMass=0.95)
+starMean <- colMeans(starPar)
+# Make an empty plot
+x <- starDat$xvar
+y <- starDat$obs
+plot(x, y, type="n", las=1, bty="l")
+
+mtext(text = "Urchin density", side=2, line = 2.2, cex=1)
+mtext(text = "Sea star density", side=1, line = 2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+polygon(x=c(x, rev(x)), y=c(starHDI[1, -c(1:2)], 
+  rev(starHDI[2, -c(1:2)])), col="#50505080", border="grey80")
+
+# plot the data points and mean regression line
+points(x, y, pch=16, col="blue")
+abline(a=starMean[1], b=starMean[2], col="blue", lwd=2)
+```
+
+```{r}
+round(summary(chitMod, pars=c("alpha", "beta"))$summary,2)
+
+round(summary(starMod, pars=c("alpha", "beta"))$summary,2)
+```
+
+From the univariate model results, it looks like both chitons and sea stars have similar negative effects on urchin densities. 
+
+  * A 1 SD change in chiton or sea star densites decreases urchin densities by $\approx 0.5$ and $\approx 0.75$ urchins respectively.
+
+\subsection*{Multiple regression}
+Now though we will include both predictors in one model by adding more parameters and predictors to the definition of $\mu_i$.
+
+\begin{align}
+  obs_i    &\sim \mathrm{Normal}(\mu_i, \sigma)  \nonumber  \\ 
+  \mu_i     &= \alpha + \sum_{j=1}^n \beta_j x_{ji}   \nonumber  \\
+            &= \alpha + \beta_1 x_{1i} + \beta_2 x_{2i} + \ldots + \beta_n x_{ni} \\
+  \alpha  &\sim \mathrm{Normal}(0, 10)      \nonumber   \\
+  \beta_j   &\sim \mathrm{Normal}(0, 1)        \nonumber   \\
+  \sigma  &\sim \mathrm{Cauchy^+}(0, 10)      \nonumber
+\end{align}
+
+We can set up the model (`multiMod.stan`) as follows. I am going to make use of the `transformed data` block to put our x variables into a matrix. 
+
+I am also going to simulate new data in the `generated  quantities` block that I will describe in more detail below.
+
+```{r engine = 'cat', engine.opts = list(file = "multiMod.stan", lang = "stan"), echo=FALSE}
+data {
+  int<lower=0> nObs;
+  int<lower=0> nVar;      // no. vars
+  vector[nObs] obs;
+  vector[nObs] x1;  
+  vector[nObs] x2;  
+  real<lower=0> aSD;      // SD of prior alpha
+  real<lower=0> bSD;      // SD of prior beta
+  real<lower=0> sigmaSD;  // scale for sigma
+}
+
+transformed data {
+  matrix[nObs, nVar] X;
+  
+  X = append_col(x1, x2);   
+}
+
+parameters {
+  real alpha;
+  vector[nVar] beta;
+  real<lower=0> sigma;
+}
+
+transformed parameters {
+  // can be useful for plotting purposes
+  vector[nObs] mu;
+  mu = alpha + X*beta;
+}
+
+model {
+  alpha ~ normal(0, aSD);
+  beta ~  normal(0, bSD);
+  sigma ~ cauchy(0, sigmaSD);
+
+  obs ~ normal(mu, sigma);
+}
+
+generated quantities {
+  // Generate new counterfactual data by holding other
+  // variable at mean value
+  vector[nObs] muCH; 
+  vector[nObs] muSS;
+  
+    muCH = alpha + beta[1]*X[,1];
+    muSS = alpha + beta[2]*X[,2];
+}
+
+```
+
+```{r, eval=FALSE}
+data {
+  int<lower=0> nObs;
+  int<lower=0> nVar;      // no. vars
+  vector[nObs] obs;
+  vector[nObs] x1;  
+  vector[nObs] x2;  
+  real<lower=0> aSD;      // SD of prior alpha
+  real<lower=0> bSD;      // SD of prior beta
+  real<lower=0> sigmaSD;  // scale for sigma
+}
+
+transformed data {
+  matrix[nObs, nVar] X;
+  
+  X = append_col(x1, x2);   
+}
+
+parameters {
+  real alpha;
+  vector[nVar] beta;
+  real<lower=0> sigma;
+}
+
+transformed parameters {
+  // can be useful for plotting purposes
+  vector[nObs] mu;
+  mu = alpha + X*beta;
+}
+
+model {
+  alpha ~ normal(0, aSD);
+  beta ~  normal(0, bSD);
+  sigma ~ cauchy(0, sigmaSD);
+
+  obs ~ normal(mu, sigma);
+}
+
+generated quantities {
+  // Generate new counterfactual data by holding other
+  // variable at mean value
+  vector[nObs] muCH; 
+  vector[nObs] muSS;
+  
+    muCH = alpha + beta[1]*X[,1];
+    muSS = alpha + beta[2]*X[,2];
+}
+```
+
+```{r, message=FALSE, warning=FALSE, cache=TRUE, verbose=FALSE}
+
+dat <- list(nObs=nObs, nVar=2, obs=urchins, x1=as.vector(scale(chitons)), 
+  x2 = as.vector(scale(seaStars)), aSD=10, bSD=1, sigmaSD=10)
+
+multMod <- stan(file="multiMod.stan", data=dat, iter=2000,
+ chains=4, seed=867.5309, pars="mu", include=FALSE)
+```
+
+```{r}
+round(summary(multMod, pars=c("alpha", "beta"))$summary,2)
+```
+
+
+The posterior mean for chitons (`beta[1]`) is now quite close to zero, with lots of probability on both sides. 
+
+The posterior mean for sea stars (`beta[2]`) is essentially unchanged. 
+
+```{r, echo=FALSE, fig.height=2, fig.width=5, message=FALSE, warning=FALSE}
+plotMult <- plot(multMod, pars=c("alpha", "beta", "sigma"), ci_level=0.5)
+plotMult + theme(text=element_text(family="ArialMT"))
+```
+
+These results can be interpreted as \emph{Once we know the density of sea stars, there is little to no additional predictive power for urchins in also knowing chiton densities.}
+
+\subsection*{Counterfactual plots}
+Visualizing the results of multiple regressions can be tricky. One thing that we  can do to help understand the implications of the model is to simulate \emph{counterfactual} data and plot those results.  
+  
+  * Show implied predictions for imaginary experiments in which different predictor values can be changed independently of each other.
+
+In the `multMod` stan model, I added a generated quantities section:
+
+```{r, eval=FALSE}
+generated quantities {
+  // Generate new counterfactual data by holding other
+  // variable at mean value
+  vector[nObs] muCH; 
+  vector[nObs] muSS;
+  
+    muCH = alpha + beta[1]*X[,1];
+    muSS = alpha + beta[2]*X[,2];
+}
+```
+
+These new vectors simulate new data with one variable (e.g., chitons) while holding the other variable (sea stars) constant---at it's mean, for example.
+  
+  * Because both predictors are centered and scaled, the intercept is the mean urchin density when both chitons and sea stars are at their mean densities. 
+    * Not including one of the predictors and coefficients thus accomplishes this.
+
+```{r}
+# Extract results for both chitons and sea stars
+oCH <- order(chitons)
+muCH <- as.matrix(multMod, pars="muCH")
+chitHDI <- apply(muCH,2, HDI, credMass=0.95)
+chitMean <- colMeans(muCH)[oCH]
+
+oSS <- order(seaStars)
+muSS <- as.matrix(multMod, pars="muSS")
+starHDI <- apply(muSS,2, HDI, credMass=0.95)
+starMean <- colMeans(muSS)[oSS]
+```
+
+```{r,, fig.height=3, fig.width=7}
+par(mar=c(3,3.2,0.1,0.5))
+par(mfrow=c(1,2))
+
+# Make an empty plot
+x <- chitonDat$xvar
+y <- chitonDat$obs
+plot(x, y, type="n", las=1, bty="l")
+
+mtext(text = "Urchin density", side=2, line = 2.2, cex=1)
+mtext(text = expression(paste("Chiton density | sea stars = ", bar(SS))), 
+  side=1, line = 2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+polygon(x=c(x, rev(x)), y=c(chitHDI[1,oCH], 
+  rev(chitHDI[2,oCH])), col="#50505080", border="grey80")
+
+# plot the data points and mean regression line
+lines(x, chitMean, col="blue", lwd=2)
+
+
+### Plot seastar resutls
+x <- starDat$xvar
+y <- starDat$obs
+plot(x, y, type="n", las=1, bty="l")
+
+mtext(text = "Urchin density", side=2, line = 2.2, cex=1)
+mtext(text = expression(paste("Sea star density | chitons = ", bar(CH))), 
+  side=1, line = 2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+polygon(x=c(x, rev(x)), y=c(starHDI[1,oSS], 
+  rev(starHDI[2,oSS])), col="#50505080", border="grey80")
+
+# plot the data points and mean regression line
+lines(x, starMean, col="red", lwd=2)
+```
+
+These plots don't show any data points because the data is imaginary, but they do visually show that after taking both sea star and chiton densities into account, chiton densities don't have any direct impact on urchin densities. 
+
+Biologically, this is because urchins and chitons are not competing for food. Instead, as chiton densities increase, more sea stars congregate to eat their preferred prey. 
+
+  * Because sea stars are stupid and opportunistic, urchins are collateral damage. Thus what looks like an important effect goes away when more variables are added. 
+  
+  
+\section{Masked relationships}  
+
+Here is an actual dataset with information about the composition of milk across primate species, as well as some covariates such as brain size and body mass. 
+  
+  * Milk is a big investment and is often more metabolically expensive than gestation. 
+  
+  * One hypothesis is that primates with larger brains produce more energetic milk so the brain can grow quickly. For now we will ignore phylogenetic non-independence among species
+
+```{r}
+milk <- read.csv("milk.csv")
+head(milk)
+
+mass <- log(milk$mass)
+ncp <- milk$neocortex.perc
+kcal <- milk$kcal.per.g
+nObs <- nrow(milk)
+```
+
+The variables we will work with are:
+
+  * kcal per gram: kilocalories of energy per gram milk
+  * mass: as the average female body mass in kg
+  * neocortex percent: perecnt of total brain mass that is the neocortex. This is well elaborated in primates
+
+```{r, message=FALSE, warning=FALSE, cache=TRUE, verbose=FALSE}
+# neoCortex
+o <- order(ncp)
+ncpDat <- list(nObs=nObs, obs=kcal[o], xvar=as.vector(scale(ncp[o])), 
+  aSD=10, bSD=1, sigmaSD=10)
+
+ncpMod <- stan(file="uniMod.stan", data=ncpDat, iter=2000, 
+ chains=4, seed=867.5309)
+ 
+# extract posterior estimates of alpha, beta, and mu
+ncpPar <- as.matrix(ncpMod, pars=c("alpha", "beta", "mu"))
+```
+
+```{r, message=FALSE, warning=FALSE, cache=TRUE, verbose=FALSE}
+# mass
+o <- order(mass)
+massDat <- list(nObs=nObs, obs=kcal[o], xvar=as.vector(scale(mass[o])),
+  aSD=10, bSD=1, sigmaSD=10)
+
+massMod <- stan(file="uniMod.stan", data=massDat, iter=2000,
+ chains=4, seed=867.5309)
+
+# extract posterior estimates of alpha, beta, and mu
+massPar <- as.matrix(massMod, pars=c("alpha", "beta", "mu"))
+```
+
+
+```{r, fig.height=3, fig.width=7}
+par(mar=c(3,3.2,0.1,0.5))
+par(mfrow=c(1,2))
+# Mean & HDI for NCP
+ncpHDI <- apply(ncpPar,2, HDI, credMass=0.95)
+ncpMean <- colMeans(ncpPar)
+
+# Make an empty plot
+x <- ncpDat$xvar
+y <- ncpDat$obs
+plot(x, y, type="n", las=1, bty="l", xaxt="n")
+at <- seq(-2, 1.5, by=0.5)
+axis(1, at=at, labels=round(at*sd(ncp) + mean(ncp)))
+mtext(text = "kCal per g", side=2, line = 2.2, cex=1)
+mtext(text = "% Neocortex", side=1, line = 2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+
+polygon(x=c(x, rev(x)), y=c(ncpHDI[1, -c(1:2)], 
+  rev(ncpHDI[2, -c(1:2)])), col="#50505050", border="grey80")
+
+# plot the data points and mean regression line
+abline(a=ncpMean[1], b=ncpMean[2], col="red", lwd=2)
+
+
+### Plot mass resutls
+massHDI <- apply(massPar,2, HDI, credMass=0.95)
+massMean <- colMeans(massPar)
+# Make an empty plot
+x <- massDat$xvar
+y <- massDat$obs
+plot(x, y, type="n", las=1, bty="l", xaxt="n")
+at <- seq(-2, 1.5, by=1)
+axis(1, at=at, labels=round(at*sd(mass) + mean(mass),1))
+#mtext(text = "kCal per g", side=2, line = 2.2, cex=1)
+mtext(text = "log(mass)", side=1, line = 2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+polygon(x=c(x, rev(x)), y=c(massHDI[1, -c(1:2)], 
+  rev(massHDI[2, -c(1:2)])), col="#50505050", border="grey80")
+
+# plot the data points and mean regression line
+abline(a=massMean[1], b=massMean[2], col="blue", lwd=2)
+```
+
+If we look at the results separately, there doesn't seem to be much of an effect of neocortex, although body mass does have some impact (it is negatively correlated).
+```{r}
+round(summary(ncpMod, pars=c("alpha", "beta"))$summary,2)
+
+round(summary(massMod, pars=c("alpha", "beta"))$summary,2)
+```
+
+
+However, we get a much different result if we include both variables together:
+
+```{r, message=FALSE, warning=FALSE, cache=TRUE, verbose=FALSE}
+
+dat <- list(nObs=nObs, nVar=2, obs=kcal, x1=as.vector(scale(ncp)), 
+  x2 = as.vector(scale(mass)), aSD=10, bSD=1, sigmaSD=10)
+
+milkMod <- stan(file="multiMod.stan", data=dat, iter=2000,
+ chains=4, seed=867.5309, pars="mu", include=FALSE)
+```
+
+
+```{r}
+round(summary(milkMod, pars=c("alpha", "beta"))$summary,2)
+```
+
+If we visualize these with counterfactual plots, we see that the estimated association of both variables with `kcal` has increased.
+
+```{r, echo=FALSE}
+# Extract results for both chitons and sea stars
+oNCP <- order(ncp)
+muNCP <- as.matrix(milkMod, pars="muCH")
+ncpHDI <- apply(muNCP,2, HDI, credMass=0.95)
+ncpMean <- colMeans(muNCP)[oNCP]
+
+oM <- order(mass)
+muM <- as.matrix(milkMod, pars="muSS")
+massHDI <- apply(muM,2, HDI, credMass=0.95)
+massMean <- colMeans(muM)[oM]
+```
+
+```{r,echo=FALSE, fig.height=3, fig.width=7}
+par(mar=c(3,3.2,0.1,0.5))
+par(mfrow=c(1,2))
+
+# Make an empty plot
+x <- ncpDat$xvar
+y <- ncpDat$obs
+plot(x, y, type="n", las=1, bty="l", xaxt="n")
+at <- seq(-2, 1.5, by=0.5)
+axis(1, at=at, labels=round(at*sd(ncp) + mean(ncp)))
+mtext(text = "kCal per g", side=2, line = 2.2, cex=1)
+mtext(text = expression(paste("% neocortex | mass = ", bar(M))), 
+  side=1, line = 2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+polygon(x=c(x, rev(x)), y=c(ncpHDI[1,oNCP], 
+  rev(ncpHDI[2,oNCP])), col="#50505080", border="grey80")
+
+# plot the data points and mean regression line
+lines(x, ncpMean, col="blue", lwd=2)
+
+
+### Plot seastar resutls
+x <- massDat$xvar
+y <- massDat$obs
+plot(x, y, type="n", las=1, bty="l", xaxt="n")
+at <- seq(-2, 1.5, by=1)
+axis(1, at=at, labels=round(at*sd(mass) + mean(mass),1))
+mtext(text = expression(paste("log(mass) | % neocortex = ", bar(ncp))), 
+  side=1, line = 2, cex=1)
+
+# plot uncertainty interval in mu as a polygon
+polygon(x=c(x, rev(x)), y=c(massHDI[1,oM], 
+  rev(massHDI[2,oM])), col="#50505080", border="grey80")
+
+# plot the data points and mean regression line
+lines(x, massMean, col="red", lwd=2)
+```
+
+  * This occurs because both variables are correlated with `kcal`, but one has a postive effect and the other a negative effect. 
+    * Additionally, both variables are positively correlated with each other. 
+    
+  * Therefore the two variables tend to cancel each other out. 
+  
+What the multivariate model does is ask if species that have a high % neocortex \emph{for their body mass} have higher milk energy. We only see the effect if we control for both.  
