@@ -1,0 +1,253 @@
+---
+title: "Lecture 10.1: Overview to generalized linear modeling and link functions"
+output: pdf_document
+fontsize: 12pt 
+geometry: margin=1in
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(extrafont)
+loadfonts()
+setwd("~/Dropbox/BayesClass/2017 Class/Lecture 10")
+knitr::opts_chunk$set(
+  echo = TRUE,
+  comment = NA,
+  fig.align = "center",
+  fig.height = 3,
+  fig.width = 4
+  )
+```
+\emph{* This lecture is based on chapter 9 of Statistical Rethinking by Richard McElreath.}
+
+```{r, message=FALSE, warning=FALSE}
+library(rstan)
+library(shinystan)
+library(car)
+library(mvtnorm)
+library(rethinking)
+library(MASS)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+source("../utilityFunctions.R")
+```
+Thus far all of our models have worked by assuming a normal distribution over outcome variables $y_i$. Then, we replaced the scalar parameter $\mu$ with a linear model that gave us:
+$$
+\begin{aligned}
+  y_i &\sim \mathrm{Normal}(\mu_i, \sigma)\\
+  \mu_i &= \alpha +\beta x_i.
+\end{aligned}  
+$$
+For response variables that are continuous and not close to theoretical maxima or minima, this type of model has maximum entropy. 
+\begin{itemize}  
+    \item It is the least informative distribution that satisfies our prior knowledge of outcomes $y$.
+  \end{itemize}
+  
+But if the response variables are discrete or bounded, Gaussian likelihoods are often inadequate. 
+
+Consider counts (e.g., the number of individuals of a species)
+
+  * These variables are constrained to be $\ge0$. Using a Gaussian model for such data won't result in a summary execution by the stats police, but the model won't be good at estimating more than the average count 
+  * May give predictions that don't make sense (e.g., predicted observations $< 0$).
+
+However, we can use our noggins and prior knowledge about the natural constraints of our data in picking another distribution that appeals to maximum entropy. 
+
+We do this by generalizing our linear regression strategy---replace a parameter describing the shape of the likelihood with a linear model---to non-Gaussian probability distributions.
+  
+  * This is what a *generalized linear model* boils down to. It looks like this:
+  
+$$
+\begin{aligned}
+  y_i &\sim \mathrm{Binomial}(N, p_i) \\
+  f(p_i) &= \alpha + \beta x_i
+\end{aligned}
+$$
+There are only two changes here from our familiar Gaussian model:
+\begin{enumerate}
+\item The likelihood function is binomial rather than normal. For a count response $y$ where each observation comes from $N$ trials and with constant expectation $Np$, the binomial distribution has maximum entropy. 
+
+Most maximum entropy distributions belong to the exponential family (Fig.~\ref{exponential}). This family includes:
+  \begin{enumerate}  
+  \item \emph{The exponential distribution}: Constrained to be zero or positive. A distribution of distance and duration, it models the displacement from some point of reference in time or space. 
+    \begin{itemize}
+      \item Described by $\lambda$, the rate of events, or $\lambda^{-1}$, the average displacement. 
+      \item This is the core of survival analysis
+    \end{itemize}
+    \item \emph{The gamma distribution}: Constrained to be zero or postive. Another distribution of distance or duration, but unlike the exponential, can have peaks above zero. 
+    \begin{itemize}
+      \item If an event can only happen after two or more exponentially distributed events occur, the resulting waiting times are gamma distributed. For example, the onset of cancer is approximately gamma distributed, because multiple events are necessary for onset. 
+      \item Described by two parameters, but there are multiple formulations of those two parameters. 
+    \end{itemize}
+    \item \emph{The Poisson distribution}: Count distribution and special case of the biniomial. 
+    \begin{itemize}
+      \item If the number of trials $N$ is large (and usually unknown), and the probability of sucess $p$ is small, then the binomial converges on the Poisson distribution with an expected rate of events $\lambda = Np$.
+      \item The practical application of the Poisson is for counts that never get close to any theoretical maximum. 
+    \end{itemize}  
+  \end{enumerate}
+
+\begin{figure}[h]
+\begin{center}
+ \includegraphics[width=5.52in]{exponentialFamily.png}
+\caption{The exponential family of distributions (figure 9.6 of McElreath 2016).}
+\label{exponential}
+\end{center}
+\end{figure}
+ 
+\item The $f(p)$ indicates a \emph{link function} is needed, which is determined separately from the likelihood distribution. 
+  \begin{itemize} 
+    \item We need the link function because it is uncommon for there to be a $\mu$ parameter describing the average outcome, and rarely are parameters unbounded in both directions. 
+    \item In the binomial example, there are two parameters, but neither is the mean. Instead, the mean outcome is $Np$---a function of both parameters. 
+    \begin{itemize}
+      \item We usually know $N$, so we attach a linear model to the unknown $p$. 
+      \item $p$ is a probability mass, so it must lie between 0--1. The link function keeps our linear model $\alpha + \beta x_i$ from exceeding those boundaries.
+    \end{itemize}
+  \end{itemize}  
+\end{enumerate}
+
+\subsection*{Link functions}
+To model from any of the exponential family of distributions, we just need to attach one or more linear models to one or more parameters describing the shape of said distribution. 
+
+  * But, we need a link function to keep our model in bounds and prevent "mathematical accidents". What should that link be?
+  
+The link function's job is to map the linear space of a model like $\alpha + \beta x_i$ onto the nonlinear space of our parameters. Usually, we will go with either a *logit* or a *log* link. 
+
+**Logit link:** maps a parameter defined as a probability mass---thus constrained between zero & one---onto an unconstrained linear model. The model definition will look like this:
+
+$$\begin{aligned}
+  y_i &\sim \mathrm{Binomial}(n, p_i) \\
+  \mathrm{logit}(p_i) &= \alpha + \beta x_i
+\end{aligned}$$
+
+The logit function defines the *log-odds*:
+$$\begin{aligned}
+  \mathrm{logit}(p_i) &= \log\frac{p_i}{1-p_i}.
+\end{aligned}$$
+
+The odds of an event are the probability that the event happens divided by the probability the event doesn't happen. So:
+$$\begin{aligned}
+  \log\frac{p_i}{1-p_i} &= \alpha + \beta x_i 
+\end{aligned}$$
+With a bit of algebra, we get the *logistic* or the *inverse-logit* because it inverts the logit transformation:
+$$\begin{aligned}
+  p_i &= \frac{e^{\alpha + \beta x_i}}{1 + e^{\alpha + \beta x_i}}.
+\end{aligned}$$  
+
+```{r, fig.height=2.6, fig.width=7, fig.cap="Logit link transforms a linear model into a probability. In doing so, it compresses geometries far from zero, so that unit changes mean less and less (code not shown).", echo=FALSE}
+par(mar=c(3,3.2,0.1,0.5))
+par(mfrow=c(1,2))
+curve(2.3*x, from=-1, to=1, ylim=c(-4,4), col="cornflowerblue", 
+  lwd=2, las=1)
+mtext(text = "x", side=1, line = 2, cex=1)
+mtext(text = "log-odds", side=2, line = 2, cex=1)
+abline(h=seq(-4, 4, by=1), col="#50505050")
+
+curve(logistic(2.3*x), from=-1, to=1, ylim=c(0,1), ann=FALSE, 
+  las=1, lwd=2)
+abline(h=logistic(seq(-4,4,by=1)), col="#50505050")
+mtext(text = "x", side=1, line = 2, cex=1)
+mtext(text = "probability", side=2, line=2.4, cex=1)
+```
+
+This is illustrated in Fig. 2. On the left is a linear model ($y_i=2x_i$) in log-odds land---thus it is unconstrained from $-\infty$ to $+\infty$. 
+  
+  * The horizontal lines indicate unit changes in the predicted values as x increases. 
+
+On the right, the linear model has been transformed to a probability mass and is now bounded between 0--1. The horizontal lines have been compressed near 0--1 to fit the linear model to the geometry of a probability. 
+  
+  * The compression produces the characteristic sinusoidal logistic curve. 
+  
+This compression makes it more tricky to interpret parameter estimates because a unit change in $x$ no longer results in a unit change in $y$. Instead a unit change in $x$ will produce a larger or smaller change in $p$ depending on how far the log-odds are from zero. 
+
+  * In our model above, when $x=0$ the log-odds equal 0. Going up to $x=0.5$ results in a $\approx0.25$ increase in probability. 
+    * But increasing another half-unit to $x=1$ results in only a 15% increase in probability. And another half unit increase only increases the probability by 7%. 
+
+  * Each additional half unit produces less and less of a probability increase until the increases are vanishingly small. 
+  
+This makes intuitive sense when you think about it. If an event is almost guaranteed to happen, its probability cannot increase very much regardless, irregardless even and more importantly, of how important a parameter might be. 
+
+**Log link:** maps a parameter that is defined over positive values onto a linear model. For example, we might want to model abundance counts of newts as a function of $x$. The model might look something like:   
+
+$$
+\begin{aligned}
+  y_i &\sim \mathrm{Poisson}(\lambda_i) \\
+  \log(\lambda_i) &= \alpha + \beta x_i.
+\end{aligned}
+$$
+The log link ensures that $\lambda_i$ will always be positive, as is required of the expected value of count outcomes. 
+
+The log link assumes that a parameter's value is the exponentiation of the linear model. 
+
+  * With some algebra, we can solve $\log(\lambda_i) = \alpha + \beta x_i$ for $\lambda$:
+
+$$
+  \lambda_i = e^{\alpha + beta*x_i}
+$$
+giving us the inverse link. 
+
+```{r, fig.height=2.6, fig.width=7, fig.cap="The log link transforms a linear model into strictly positive measurements. This results in exponential mapping of the linear model. A unit change on the linear log-count scale results in increasingly large changes on the outcome scale (code not shown).", echo=FALSE}
+par(mar=c(3,3.2,0.1,0.5))
+par(mfrow=c(1,2))
+curve(2.3*x, from=-1, to=1, ylim=c(-3,3), col="cornflowerblue", 
+  lwd=2, las=1)
+mtext(text = "x", side=1, line = 2, cex=1)
+mtext(text = "log(abundance)", side=2, line = 2, cex=1)
+abline(h=seq(-3, 3, by=1), col="#50505050")
+
+curve(exp(2.3*x), from=-1, to=1, ylim=c(0,10), ann=FALSE, 
+  las=1, lwd=2)
+abline(h=exp(seq(-3,3,by=1)), col="#50505050")
+mtext(text = "x", side=1, line = 2, cex=1)
+mtext(text = "Abundance count", side=2, line=2.2, cex=1)
+```
+
+The implication of using a log link is that the outcome scales exponentially with the predictor variable(s) (Fig. 3). 
+
+  * A half-unit increase in $x$ from -0.5 to 0 results in a $y$ increase of $\approx0.68$. Another half unit increase in $x$ from 0 to 0.5 increases $y$ by 2.16. Yet another half-unit increase in $x$ from 0.5 to 1 increases $y$ by $\approx6.82$.
+  
+Another way to think about it is that an increase of one unit on the log scale increases the outcome by an order of magnitude on the untransformed scale. 
+
+  * This is apparent from the widening intervals in the right plot of Fig. 3. 
+  
+Exponential relationships grow exponentially, but most biological processes have finite upper limits. 
+  
+  * Therefore, we need to be careful when using log links because problems may arise when we try to predict outside of the range of the data used to fit our model. 
+
+
+**The take-home message here is that in GLM land, no regression coefficient $\beta$ ever produces a constant change on the response-variable scale.** When we covered multiple regression, we defined interactions as when the effect of one predictor was dependent on another predictor. 
+
+In GLMs, every predictor interacts with itself---and thus with every other predictor---because the impact of each predictor depends upon that predictor's value before the change. 
+
+Mathematically, this can be shown by computing the rate of change in $y$ for a given change in $x$. In a normally distributed model, the mean is modeled as:
+$$\begin{aligned}
+  \mu &= \alpha + \beta x
+\end{aligned}$$
+
+so the rate of change in $\mu$ with respect to $x$ is
+$$\begin{aligned}
+  \frac{\partial \mu}{\partial x} &= \beta.
+\end{aligned}$$
+No matter what $x$ is, the change is constant.
+
+But consider a binomial probability $p$:
+
+$$\begin{aligned}
+  p &= \frac{e^{\alpha + \beta x}}{1 + e^{\alpha + \beta x}}.
+\end{aligned}$$
+
+Taking the deriviative of $p$ with respect to $x$ gives us:
+$$\begin{aligned}
+  \frac{\partial p}{\partial x} &= \frac{\beta}{2(1 + \cosh(\alpha + \beta x))}.
+\end{aligned}$$
+
+The predictor $x$ appears in the derivative, so the rate of change in $x$ depends on the value of $x$---an interaction of $x$ with itself!
+
+Practically, this means that parameter estimates of GLMs do not---by themselves---tell you this importance of predictor variables on responses because each parameter represents a *relative* difference on the scale of the linear model, ignoring all other parameters. 
+  
+  * We want *absolute* differences in responses so we need to incorporate all parameters. 
+  
+Also note that we cannot use WAIC or other information criteria to decide on a likelihood function. Luckily, the maximum entropy distribution is usually the best choice of likelihood function, so we don't have to do an immoderate amount of handwringing over our choices. 
+
+
+
+
+
